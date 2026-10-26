@@ -30,7 +30,7 @@ def text(res) -> str:
     return "\n".join(getattr(c, "text", f"<{c.type}>") for c in res.content)
 
 
-async def run(url: str, root: Path) -> None:
+async def run(url: str, root: Path, guard: Guard) -> None:
     async with streamable_http_client(url) as streams:
         read, write = streams[0], streams[1]
         async with ClientSession(read, write) as s:
@@ -71,6 +71,21 @@ async def run(url: str, root: Path) -> None:
             check(asked == ["ChatGPT wants to create a file", "ChatGPT wants to create a file", "ChatGPT wants to edit a file", "ChatGPT wants to run a command"],
                   f"asked exactly once per change ({len(asked)} popups)")
 
+            # allow-everything mode
+            guard.mode = "auto"; asked.clear()
+            out = text(await call("write_file", path="auto.txt", content="no popup"))
+            check("Created" in out and not asked, "allow-all: writes without a popup")
+            out = text(await call("run_command", command="echo fine"))
+            check("fine" in out and not asked, "allow-all: commands without a popup")
+            answers.append("deny")
+            out = text(await call("run_command", command="sudo -n true"))
+            check("said no" in out and asked == ["ChatGPT wants to run a command"], "allow-all: sudo still asks")
+            out = text(await call("read_file", path="~/.ssh/id_rsa")); check("Not allowed" in out, "allow-all: ~/.ssh still blocked")
+            guard.auto_until = time.time() - 1; asked.clear(); answers.append("allow")
+            await call("write_file", path="later.txt", content="x")
+            check(guard.mode == "ask" and asked, "allow-all: goes back to asking when time runs out")
+            guard.mode = "ask"; guard.auto_until = 0
+
 
 def main() -> None:
     local = "--local" in sys.argv
@@ -95,7 +110,7 @@ def main() -> None:
             base = t.url
         print(f"Testing over {base}")
         try:
-            asyncio.run(run(f"{base}/{token}/mcp", root))
+            asyncio.run(run(f"{base}/{token}/mcp", root, guard))
             # a wrong secret must get nothing
             import urllib.request, urllib.error
             try:

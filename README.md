@@ -50,6 +50,7 @@ Porthole gives a website access to your computer, so it is strict by design:
 - **Never shared, even inside a shared folder:** `~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, cookies, Mail, Messages, browser profiles, `.env` files and private keys.
 - **A popup for every change.** Each edit, file write, command and screenshot shows a native macOS dialog with the exact diff or command. *Deny* is the default and it gives up after 2 minutes. *Allow for 10 min* exists for long sessions, and the dashboard shows a countdown while it's on.
 - **Read-only mode.** `porthole start --read-only` means nothing can change.
+- **Allow-everything mode, when you want it.** `porthole start --allow-all` turns the popups off, so ChatGPT works like Claude Code with permissions skipped. Add `--for 30m` to go back to asking automatically. You type `yes` to switch it on, it's never remembered between runs, and the dashboard shows a red **ALLOW EVERYTHING** banner. Even in this mode, Porthole still asks before risky commands: `sudo`, `rm -rf ~` or `/`, erasing disks, `curl … | sh`, `launchctl`, `killall`, `git push --force`. Folder limits and blocked locations still apply.
 - **A log of everything.** The terminal shows each action live, and `porthole log` keeps the history in `~/.porthole/log.jsonl`.
 - **Kill switch.** Press Ctrl-C or close the window, or run `porthole stop` from anywhere.
 
@@ -58,7 +59,7 @@ Prompt injection is real. A web page or file ChatGPT reads could try to trick it
 ## Commands
 
 ```bash
-porthole start [--allow FOLDER]... [--read-only] [--keep-link] [--local]
+porthole start [--allow FOLDER]... [--read-only | --allow-all [--for 30m]] [--keep-link] [--local]
 porthole stop           # close it from another terminal
 porthole status         # open or closed, folders, mode
 porthole link           # print and copy the current link

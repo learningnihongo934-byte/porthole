@@ -1,6 +1,6 @@
 [project]
 name = "porthole"
-version = "1.0.0"
+version = "1.1.0"
 description = "Let ChatGPT use your Mac's files and terminal, with your approval for every change."
 readme = "README.md"
 requires-python = ">=3.11"

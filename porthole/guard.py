@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 import threading
@@ -28,6 +29,17 @@ BLOCKED = [
     HOME / "Library" / "Application Support" / "com.apple.TCC",
     STATE,
 ]
+# Even in allow-everything mode these still pop up, because they can't be undone or reach beyond the shared folders.
+RISKY = re.compile("|".join([
+    r"(^|[;&|`(]\s*)(sudo|su|doas)\b",                  # admin rights
+    r"\brm\s+-[a-z]*[rf][a-z]*\s+(/|~|\$HOME)(\s|/?$|/\*)", # deleting the disk or home folder
+    r"\bmkfs", r"\bdiskutil\s+(erase|partition)", r"\bdd\b.*\bof=/dev/", r">\s*/dev/r?disk",
+    r"\bcsrutil\b", r"\bspctl\b", r"\blaunchctl\b", r"\bsecurity\s+(find|dump|delete)",
+    r"\bkillall\b", r"\bshutdown\b", r"\breboot\b", r"\bchmod\s+-R\s+777\s+[/~]",
+    r"\b(curl|wget)\b[^|]*\|\s*(ba|z)?sh\b",            # running a script straight from the internet
+    r"\bgit\s+push\b.*(--force|-f\b)",
+]), re.I)
+
 SECRET_NAMES = {".env", ".env.local", ".env.production", "id_rsa", "id_ed25519", "credentials.json", "secrets.json"}
 
 DEFAULTS = {"allow": [str(HOME / "Documents")], "mode": "ask", "token": None}
@@ -73,7 +85,8 @@ def mac_dialog(title: str, detail: str) -> str:
 @dataclass
 class Guard:
     roots: list[Path]
-    mode: str = "ask"                               # "ask" or "readonly"
+    mode: str = "ask"                               # "ask", "readonly" or "auto" (allow everything)
+    auto_until: float = 0.0                          # when allow-everything ends (0 = until Porthole closes)
     approver: Callable[[str, str], str] = mac_dialog
     events: deque = field(default_factory=lambda: deque(maxlen=200))
     trusted_until: float = 0.0
@@ -104,12 +117,22 @@ class Guard:
 
     # ---- approvals
 
-    def approve(self, action: str, detail: str) -> None:
+    @property
+    def auto(self) -> bool:
+        if self.mode == "auto" and self.auto_until and time.time() >= self.auto_until:
+            self.mode = "ask"                       # the time limit ran out: back to asking
+        return self.mode == "auto"
+
+    def approve(self, action: str, detail: str, risky: bool = False) -> None:
         if self.mode == "readonly":
             raise Denied("Porthole is in read-only mode, so nothing can be changed or run. Ask the user to restart it without --read-only.")
+        if self.auto and not risky:
+            return
         with self._lock:                            # one popup at a time
-            if time.time() < self.trusted_until:
+            if time.time() < self.trusted_until and not risky:
                 return
+            if risky:
+                detail = "⚠️ This one can't be undone or reaches outside your shared folders, so Porthole asks even in allow-everything mode.\n\n" + detail
             answer = self.approver(f"ChatGPT wants to {action}", detail)
         if answer == "allow10":
             self.trusted_until = time.time() + 600

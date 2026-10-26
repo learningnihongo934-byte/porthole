@@ -18,7 +18,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
-from .guard import Denied, Guard
+from .guard import RISKY, Denied, Guard
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".next", "dist", "build", ".cache", "Library"}
 MAX_READ = 400_000
@@ -40,7 +40,7 @@ def build_server(guard: Guard) -> MCPServer:
     # request logs would print the secret link, so keep the SDK quiet
     for name in ("mcp", "httpx", "uvicorn.access"):
         logging.getLogger(name).setLevel(logging.WARNING)
-    mcp = MCPServer(name="Porthole", title="Porthole: your Mac", instructions=INSTRUCTIONS, version="1.0.0", log_level="WARNING")
+    mcp = MCPServer(name="Porthole", title="Porthole: your Mac", instructions=INSTRUCTIONS, version="1.1.0", log_level="WARNING")
 
     def walk(root: Path):
         for dirpath, dirnames, filenames in os.walk(root):
@@ -68,7 +68,9 @@ def build_server(guard: Guard) -> MCPServer:
         """Shows the shared folders, whether changes are allowed, and basic facts about the Mac. Call this first."""
         def go():
             lines = [f"Shared folders (relative paths start in the first): " + ", ".join(guard.show(r) for r in guard.roots),
-                     f"Mode: {'read-only' if guard.mode == 'readonly' else 'changes and commands need the user to approve each one'}",
+                     "Mode: " + ("read-only" if guard.mode == "readonly" else
+                                 "allow everything: changes and commands run without asking (except a few risky commands). Be careful and explain what you do." if guard.auto else
+                                 "changes and commands need the user to approve each one"),
                      f"macOS {platform.mac_ver()[0]} on {platform.machine()}, shell zsh, home is ~",
                      f"Tools on PATH: " + ", ".join(t for t in ["git", "python3", "node", "npm", "brew", "rg", "swift", "uv"] if shutil.which(t))]
             return "\n".join(lines)
@@ -178,7 +180,7 @@ def build_server(guard: Guard) -> MCPServer:
         """Runs a shell command (zsh) in a shared folder and returns its output and exit code. The user approves it first."""
         def go():
             d = guard.resolve(cwd)
-            guard.approve("run a command", f"In {guard.show(d)}:\n\n$ {command}")
+            guard.approve("run a command", f"In {guard.show(d)}:\n\n$ {command}", risky=bool(RISKY.search(command)))
             try:
                 r = subprocess.run(["/bin/zsh", "-lc", command], cwd=d, capture_output=True, text=True,
                                    timeout=max(1, min(timeout_seconds, 1800)), stdin=subprocess.DEVNULL)

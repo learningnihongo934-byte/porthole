@@ -108,8 +108,10 @@ def dashboard(guard: Guard, link: str | None, status: str, started: float, copie
     head = Table.grid(padding=(0, 2))
     head.add_column(); head.add_column()
     on = link is not None
+    auto = guard.auto
     title = Text.from_markup(f"[bold white]Porthole[/]  [{'bold green' if on else 'yellow'}]● {'open' if on else status}[/]"
-                             f"\n[dim]ChatGPT can use your Mac through this window. Close it to cut access.[/]")
+                             + ("  [bold white on red] ALLOW EVERYTHING [/]" if auto else "")
+                             + f"\n[dim]ChatGPT can use your Mac through this window. Close it to cut access.[/]")
     head.add_row(Text.from_markup(LOGO), title)
 
     info = Table.grid(padding=(0, 2))
@@ -118,7 +120,13 @@ def dashboard(guard: Guard, link: str | None, status: str, started: float, copie
         info.add_row("Link", Text(link, style=f"bold {SEA}"))
         info.add_row("", Text("copied to clipboard" if copied else "copy the link above", style="dim"))
     info.add_row("Folders", ", ".join(guard.show(r) for r in guard.roots))
-    info.add_row("Mode", "[bold yellow]read-only[/]" if guard.mode == "readonly" else "reads are free · [bold]every change and command asks you first[/]")
+    if guard.mode == "readonly":
+        info.add_row("Mode", "[bold yellow]read-only[/]")
+    elif auto:
+        left = f" for {int((guard.auto_until - time.time()) // 60)}m {int(guard.auto_until - time.time()) % 60:02d}s more" if guard.auto_until else " until you close Porthole"
+        info.add_row("Mode", f"[bold red]allow everything{left}[/] · no popups, except risky commands like sudo or rm -rf ~")
+    else:
+        info.add_row("Mode", "reads are free · [bold]every change and command asks you first[/]")
     if guard.trusted_until > time.time():
         info.add_row("", f"[bold red]auto-allowing changes for {int(guard.trusted_until - time.time())}s more[/]")
     up = int(time.time() - started)
@@ -155,10 +163,35 @@ def cmd_start(a) -> int:
     cfg = load_config()
     if a.allow:
         cfg["allow"] = [str(Path(p).expanduser().resolve()) for p in a.allow]
+    if a.read_only and a.allow_all:
+        console.print("[red]Pick one: --read-only or --allow-all.[/]")
+        return 1
     if a.read_only:
         cfg["mode"] = "readonly"
-    elif a.ask:
-        cfg["mode"] = "ask"
+    elif a.ask or cfg.get("mode") == "auto":
+        cfg["mode"] = "ask"                         # allow-everything is never remembered; it's chosen each time
+    auto_until = 0.0
+    if a.allow_all:
+        if a.for_ and not (secs := parse_duration(a.for_)):
+            console.print(f"[red]Can't read --for {a.for_}. Try 30m or 2h.[/]")
+            return 1
+        auto_until = time.time() + secs if a.for_ else 0.0
+        console.print(Panel.fit(
+            "[bold]Allow everything[/] lets ChatGPT edit files and run commands in your shared folders [bold]without asking[/].\n"
+            "A web page or file it reads could trick it into doing something you didn't want.\n"
+            "Risky commands (sudo, rm -rf ~, disk erase, curl | sh, force-push…) still pop up.",
+            border_style="red", title="[bold red]Heads up[/]"))
+        if not a.yes:
+            if not sys.stdin.isatty():
+                console.print("[red]Add --yes to confirm allow-everything when not running in a terminal.[/]")
+                return 1
+            try:
+                answer = input("Type yes to turn it on: ")
+            except (EOFError, KeyboardInterrupt):
+                answer = ""
+            if answer.strip().lower() != "yes":
+                console.print("Okay, starting in the normal ask-first mode.")
+                a.allow_all = False
     missing = [p for p in cfg["allow"] if not Path(p).is_dir()]
     if missing:
         console.print(f"[red]These folders don't exist:[/] {', '.join(missing)}")
@@ -171,6 +204,8 @@ def cmd_start(a) -> int:
     save_config(cfg)
 
     guard = Guard.from_config(cfg)
+    if a.allow_all:
+        guard.mode, guard.auto_until = "auto", auto_until
     server = serve(guard, token, a.port)
     tunnel = Tunnel(a.port)
     if not a.local:
@@ -196,7 +231,7 @@ def cmd_start(a) -> int:
                         return 1
                     if link:
                         copied = copy(link)
-                        RUN.write_text(json.dumps({"pid": os.getpid(), "link": link, "started": started}))
+                        RUN.write_text(json.dumps({"pid": os.getpid(), "link": link, "started": started, "mode": guard.mode, "auto_until": guard.auto_until}))
                         RUN.chmod(0o600)
                 if tunnel.proc and tunnel.proc.poll() is not None and link:
                     live.stop()
@@ -212,6 +247,11 @@ def cmd_start(a) -> int:
         RUN.unlink(missing_ok=True)
     console.print(f"[{BRASS}]Porthole closed.[/] That link no longer works.")
     return 0
+
+
+def parse_duration(s: str) -> float:
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smh]?)\s*", s.lower())
+    return float(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "": 60}[m.group(2)] if m else 0.0
 
 
 def cmd_stop(_a) -> int:
@@ -234,7 +274,11 @@ def cmd_status(_a) -> int:
     if info:
         console.print(f"  Link     {info['link']}")
     console.print(f"  Folders  {', '.join(cfg['allow'])}")
-    console.print(f"  Mode     {'read-only' if cfg['mode'] == 'readonly' else 'ask before every change'}")
+    mode, until = (info or {}).get("mode", cfg["mode"]), (info or {}).get("auto_until", 0)
+    if mode == "auto" and until and time.time() >= until:
+        mode = "ask"
+    label = {"readonly": "read-only", "auto": "[bold red]allow everything[/]" + (f" until {time.strftime('%H:%M', time.localtime(until))}" if until else "")}
+    console.print(f"  Mode     {label.get(mode, 'ask before every change')}")
     console.print(f"  Tunnel   {'ready' if find_cloudflared() else '[red]cloudflared missing[/]'}")
     return 0
 
@@ -285,12 +329,15 @@ def cmd_folders(a) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="porthole", description="Let ChatGPT use your Mac's files and terminal, with your approval for every change.")
-    p.add_argument("--version", action="version", version="porthole 1.0.0")
+    p.add_argument("--version", action="version", version="porthole 1.1.0")
     sub = p.add_subparsers(dest="cmd")
     s = sub.add_parser("start", help="open the porthole and get a link for ChatGPT")
     s.add_argument("--allow", action="append", metavar="FOLDER", help="share this folder (repeatable; default ~/Documents)")
     s.add_argument("--read-only", action="store_true", help="ChatGPT can look but not change or run anything")
     s.add_argument("--ask", action="store_true", help="switch back from read-only to asking before changes")
+    s.add_argument("--allow-all", action="store_true", help="no popups: changes and commands run without asking (risky commands still ask)")
+    s.add_argument("--for", dest="for_", metavar="TIME", help="with --allow-all: go back to asking after this long, e.g. 30m or 2h")
+    s.add_argument("--yes", action="store_true", help="skip the allow-all confirmation")
     s.add_argument("--keep-link", action="store_true", help="reuse the last secret (the tunnel address still changes)")
     s.add_argument("--local", action="store_true", help="no tunnel; only apps on this Mac can connect")
     s.add_argument("--port", type=int, default=8765)
