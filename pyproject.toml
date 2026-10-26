@@ -1,0 +1,16 @@
+[project]
+name = "porthole"
+version = "1.0.0"
+description = "Let ChatGPT use your Mac's files and terminal, with your approval for every change."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Virat Reddy Kaukuntla" }]
+license = { text = "MIT" }
+dependencies = ["mcp>=1.12", "rich>=13", "uvicorn>=0.30"]
+
+[project.scripts]
+porthole = "porthole.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
