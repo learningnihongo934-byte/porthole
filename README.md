@@ -91,4 +91,4 @@ curl -fsSL https://raw.githubusercontent.com/learningnihongo934-byte/porthole/ma
 
 ---
 
-Made by Virat Reddy Kaukuntla · [rennko.tech](https://rennko.tech)
+Made by **Virat Reddy Kaukuntla** ([@learningnihongo934-byte](https://github.com/learningnihongo934-byte)) · [rennko.tech](https://rennko.tech)
